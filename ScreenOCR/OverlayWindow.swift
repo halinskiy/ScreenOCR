@@ -142,16 +142,26 @@ final class SelectionView: NSView {
             return
         }
 
-        guard selectionRect.width > 5, selectionRect.height > 5 else {
-            onCancel?()
-            return
+        // Inflate thin selections so they intersect word boxes
+        var inflated = selectionRect
+        if inflated.height < 10 {
+            inflated = inflated.insetBy(dx: 0, dy: -10)
+        }
+        if inflated.width < 10 {
+            inflated = inflated.insetBy(dx: -10, dy: 0)
         }
 
-        var finalRect = selectionRect
+        var finalRect = inflated
         if !isSVGMode {
-            for box in screenWordBoxes where selectionRect.intersects(box) {
+            for box in screenWordBoxes where inflated.intersects(box) {
                 finalRect = finalRect.union(box)
             }
+        }
+
+        // Nothing captured — cancel
+        guard finalRect.width > 2, finalRect.height > 2 else {
+            onCancel?()
+            return
         }
 
         completeWith(viewRect: finalRect)

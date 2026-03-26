@@ -30,5 +30,11 @@
     <string>ScreenOCR needs Automation permission to extract SVG icons from your browser.</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
+    <key>SUFeedURL</key>
+    <string>https://raw.githubusercontent.com/halinskiy/ScreenOCR/main/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>2Ne7z6Ps8wOBB0xFredP5la4nQbr61Gpn0vh8f3YOyo=</string>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
 </dict>
 </plist>

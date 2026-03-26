@@ -1,4 +1,5 @@
 import Cocoa
+import Sparkle
 
 // MARK: - App Delegate
 
@@ -10,6 +11,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isSVGMode = false
     private var previousApp: NSRunningApplication?
     private var preCapturedImages: [(displayID: CGDirectDisplayID, bounds: CGRect, image: CGImage)] = []
+
+    // Sparkle auto-updater
+    private let updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
 
     // MARK: Lifecycle
 
@@ -117,6 +121,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         colorSubmenu.addItem(customItem)
         colorItem.submenu = colorSubmenu
         menu.addItem(colorItem)
+
+        menu.addItem(.separator())
+
+        let updateItem = NSMenuItem(title: "Check for Updates…", action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "u")
+        updateItem.target = updaterController
+        menu.addItem(updateItem)
 
         menu.addItem(.separator())
 
