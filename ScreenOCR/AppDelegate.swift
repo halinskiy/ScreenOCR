@@ -1,6 +1,10 @@
 import Cocoa
 import Sparkle
 
+// MARK: - Capture Mode
+
+enum CaptureMode { case ocr, svg, hex }
+
 // MARK: - App Delegate
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -8,11 +12,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let overlay = OverlayWindow()
     private var eventTap: CFMachPort?
     private var isCapturing = false
-    private var isSVGMode = false
+    private var currentMode: CaptureMode = .ocr
     private var previousApp: NSRunningApplication?
     private var preCapturedImages: [(displayID: CGDirectDisplayID, bounds: CGRect, image: CGImage)] = []
 
-    // Sparkle auto-updater
     private let updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
 
     // MARK: Lifecycle
@@ -20,15 +23,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMainMenu()
         setupStatusItem()
-
-        if !PermissionManager.hasScreenRecordingPermission {
-            PermissionManager.requestScreenRecordingPermission()
-        }
-
-        if !PermissionManager.hasAccessibilityPermission {
-            PermissionManager.requestAccessibilityPermission()
-        }
-
+        WelcomeWindowController.showIfNeeded()
+        // Always register with ScreenCaptureKit so app appears in Screen & System Audio Recording list.
+        // On macOS 15+, CGPreflightScreenCaptureAccess() may return true without registering in the new TCC list.
+        PermissionManager.registerWithScreenCaptureKit()
+        if !PermissionManager.hasScreenRecordingPermission { PermissionManager.requestScreenRecordingPermission() }
+        if !PermissionManager.hasAccessibilityPermission { PermissionManager.requestAccessibilityPermission() }
         installEventTap()
     }
 
@@ -37,13 +37,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupMainMenu() {
         let mainMenu = NSMenu()
         NSApp.mainMenu = mainMenu
-
         let appMenuItem = NSMenuItem()
         mainMenu.addItem(appMenuItem)
         let appMenu = NSMenu()
         appMenuItem.submenu = appMenu
         appMenu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
-
         let editMenuItem = NSMenuItem()
         mainMenu.addItem(editMenuItem)
         let editMenu = NSMenu(title: "Edit")
@@ -59,7 +57,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-
         if let button = statusItem.button {
             if let image = NSImage(systemSymbolName: "text.viewfinder", accessibilityDescription: "Screen OCR") {
                 image.isTemplate = true
@@ -69,7 +66,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 button.title = "OCR"
             }
         }
-
         rebuildMenu()
     }
 
@@ -81,17 +77,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.minimumWidth = 280
 
-        let ocrItem = NSMenuItem(title: "OCR Capture", action: #selector(startOCRCapture), keyEquivalent: "")
-        ocrItem.target = self
-        ocrItem.keyEquivalent = "1"
-        ocrItem.keyEquivalentModifierMask = [.command, .shift]
-        menu.addItem(ocrItem)
+        let captureItem = NSMenuItem(title: "Capture  ⌘⇧1", action: #selector(handleCaptureHotkey), keyEquivalent: "")
+        captureItem.target = self
+        menu.addItem(captureItem)
 
-        let svgItem = NSMenuItem(title: "SVG Capture", action: #selector(startSVGCapture), keyEquivalent: "")
-        svgItem.target = self
-        svgItem.keyEquivalent = "2"
-        svgItem.keyEquivalentModifierMask = [.command, .shift]
-        menu.addItem(svgItem)
+        menu.addItem(.separator())
+
+        let permItem = NSMenuItem(title: "Permissions & Welcome…", action: #selector(showWelcome), keyEquivalent: "")
+        permItem.target = self
+        menu.addItem(permItem)
 
         menu.addItem(.separator())
 
@@ -141,7 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
     }
 
-    // MARK: Global Hotkey (CGEvent Tap)
+    // MARK: Global Hotkey
 
     private func installEventTap() {
         let mask: CGEventMask = (1 << CGEventType.keyDown.rawValue)
@@ -153,42 +147,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             options: .defaultTap,
             eventsOfInterest: mask,
             callback: { proxy, type, event, refcon -> Unmanaged<CGEvent>? in
-                let appDelegate = Unmanaged<AppDelegate>.fromOpaque(refcon!).takeUnretainedValue()
-
+                let app = Unmanaged<AppDelegate>.fromOpaque(refcon!).takeUnretainedValue()
                 guard type == .keyDown else {
                     if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-                        if let tap = appDelegate.eventTap {
-                            CGEvent.tapEnable(tap: tap, enable: true)
-                        }
+                        if let tap = app.eventTap { CGEvent.tapEnable(tap: tap, enable: true) }
                     }
                     return Unmanaged.passUnretained(event)
                 }
-
                 let flags = event.flags
                 let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
                 let hasCmd = flags.contains(.maskCommand)
                 let hasShift = flags.contains(.maskShift)
                 let hasExtra = !flags.intersection([.maskControl, .maskAlternate]).isEmpty
-
-                if hasCmd && hasShift && !hasExtra {
-                    if keyCode == 18 { // ⌘⇧1 — OCR Capture
-                        DispatchQueue.main.async { appDelegate.startOCRCapture() }
-                        return nil
-                    }
-                    if keyCode == 19 { // ⌘⇧2 — SVG Capture
-                        DispatchQueue.main.async { appDelegate.startSVGCapture() }
-                        return nil
-                    }
+                if hasCmd && hasShift && !hasExtra && keyCode == 18 {
+                    DispatchQueue.main.async { app.handleCaptureHotkey() }
+                    return nil
                 }
-
                 return Unmanaged.passUnretained(event)
             },
             userInfo: selfPtr
         ) else {
             NSLog("ScreenOCR: Failed to create CGEvent tap — Accessibility permission required")
-            DispatchQueue.main.async {
-                PermissionManager.showAccessibilityDeniedAlert()
-            }
+            DispatchQueue.main.async { PermissionManager.showAccessibilityDeniedAlert() }
             return
         }
 
@@ -196,6 +176,105 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+    }
+
+    // MARK: Capture Flow
+
+    @objc func handleCaptureHotkey() {
+        if isCapturing {
+            cycleMode()
+        } else {
+            currentMode = .ocr
+            startCapture()
+        }
+    }
+
+    private func cycleMode() {
+        switch currentMode {
+        case .ocr:
+            currentMode = .hex
+            overlay.switchToHEXMode { [weak self] hex in
+                self?.handleColorPicked(hex)
+            }
+            updateStatusLabel("HEX")
+            ToastWindow.show("Color Picker")
+        case .hex:
+            currentMode = .svg
+            overlay.switchToSVGMode()
+            updateStatusLabel("SVG")
+            ToastWindow.show("SVG Mode")
+            SVGExtractor.getSVGBoundingBoxes(from: previousApp) { [weak self] boxes in
+                self?.overlay.setSVGBoxes(boxes)
+            }
+        case .svg:
+            currentMode = .ocr
+            overlay.switchToOCRMode()
+            overlay.preScanWordBoxes(level: .fast, screenImages: screenImagesForOverlay)
+            updateStatusLabel(nil)
+            ToastWindow.show("OCR Mode")
+        }
+    }
+
+    private func startCapture() {
+        guard PermissionManager.hasScreenRecordingPermission else {
+            PermissionManager.showPermissionDeniedAlert()
+            return
+        }
+        preCaptureScreens()
+        isCapturing = true
+        previousApp = NSWorkspace.shared.frontmostApplication
+
+        switch currentMode {
+        case .ocr:
+            overlay.showFast(screenImages: screenImagesForOverlay, onComplete: { [weak self] rect in
+                self?.handleCaptureComplete(rect)
+            }, onCancel: { [weak self] in
+                self?.cancelCapture()
+            })
+
+        case .svg:
+            updateStatusLabel("SVG")
+            overlay.showForSVG(screenImages: screenImagesForOverlay, onComplete: { [weak self] rect in
+                self?.handleCaptureComplete(rect)
+            }, onCancel: { [weak self] in
+                self?.updateStatusLabel(nil)
+                self?.cancelCapture()
+            })
+            SVGExtractor.getSVGBoundingBoxes(from: previousApp) { [weak self] boxes in
+                self?.overlay.setSVGBoxes(boxes)
+            }
+
+        case .hex:
+            updateStatusLabel("HEX")
+            overlay.showForHEX(screenImages: screenImagesForOverlay, onColorPicked: { [weak self] hex in
+                self?.handleColorPicked(hex)
+            }, onCancel: { [weak self] in
+                self?.updateStatusLabel(nil)
+                self?.cancelCapture()
+            })
+        }
+    }
+
+    private func cancelCapture() {
+        isCapturing = false
+        preCapturedImages = []
+        smartReturnFocus()
+    }
+
+    private func handleColorPicked(_ hex: String) {
+        isCapturing = false
+        updateStatusLabel(nil)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(hex, forType: .string)
+        ToastWindow.show(hex)
+        smartReturnFocus()
+    }
+
+    private func handleCaptureComplete(_ cgRect: CGRect) {
+        switch currentMode {
+        case .svg: performSVGExtraction(on: cgRect)
+        case .ocr, .hex: performPreCapturedOCR(on: cgRect)
+        }
     }
 
     // MARK: Pre-capture
@@ -221,8 +300,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let localRect = CGRect(
                     x: (rect.origin.x - bounds.origin.x) * scale,
                     y: (rect.origin.y - bounds.origin.y) * scale,
-                    width: rect.width * scale,
-                    height: rect.height * scale
+                    width: rect.width * scale, height: rect.height * scale
                 )
                 return image.cropping(to: localRect)
             }
@@ -230,112 +308,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return nil
     }
 
-    // MARK: Capture Flow
-
-    @objc private func startOCRCapture() {
-        // Switch mode on the fly if already capturing
-        if isCapturing {
-            guard isSVGMode else { return }
-            isSVGMode = false
-            overlay.switchToOCRMode()
-            overlay.preScanWordBoxes(level: .fast, screenImages: screenImagesForOverlay)
-            updateStatusLabel(nil)
-            ToastWindow.show("OCR Mode")
-            return
-        }
-
-        guard PermissionManager.hasScreenRecordingPermission else {
-            PermissionManager.showPermissionDeniedAlert()
-            return
-        }
-
-        preCaptureScreens()
-
-        isCapturing = true
-        isSVGMode = false
-        previousApp = NSWorkspace.shared.frontmostApplication
-
-        overlay.showFast(screenImages: screenImagesForOverlay, onComplete: { [weak self] cgRect in
-            self?.handleCaptureComplete(cgRect)
-        }, onCancel: { [weak self] in
-            self?.isCapturing = false
-            self?.preCapturedImages = []
-            self?.smartReturnFocus()
-        })
-    }
-
-    @objc private func startSVGCapture() {
-        // Switch mode on the fly if already capturing
-        if isCapturing {
-            guard !isSVGMode else { return }
-            isSVGMode = true
-            overlay.switchToSVGMode()
-            updateStatusLabel("SVG")
-            ToastWindow.show("SVG Mode")
-            SVGExtractor.getSVGBoundingBoxes(from: previousApp) { [weak self] boxes in
-                self?.overlay.setSVGBoxes(boxes)
-            }
-            return
-        }
-
-        guard PermissionManager.hasScreenRecordingPermission else {
-            PermissionManager.showPermissionDeniedAlert()
-            return
-        }
-
-        preCaptureScreens()
-
-        isCapturing = true
-        isSVGMode = true
-        let browserApp = NSWorkspace.shared.frontmostApplication
-        previousApp = browserApp
-        updateStatusLabel("SVG")
-        ToastWindow.show("SVG Mode")
-
-        overlay.showForSVG(screenImages: screenImagesForOverlay, onComplete: { [weak self] cgRect in
-            self?.handleCaptureComplete(cgRect)
-        }, onCancel: { [weak self] in
-            self?.isCapturing = false
-            self?.preCapturedImages = []
-            self?.updateStatusLabel(nil)
-            self?.smartReturnFocus()
-        })
-
-        SVGExtractor.getSVGBoundingBoxes(from: browserApp) { [weak self] boxes in
-            self?.overlay.setSVGBoxes(boxes)
-        }
-    }
-
-    /// Unified completion handler — routes to OCR or SVG based on current mode
-    private func handleCaptureComplete(_ cgRect: CGRect) {
-        if isSVGMode {
-            updateStatusLabel(nil)
-            performSVGExtraction(on: cgRect)
-        } else {
-            performPreCapturedOCR(on: cgRect)
-        }
-    }
-
-    // MARK: OCR from pre-captured image (instant — no post-dismiss delay)
+    // MARK: OCR
 
     private func performPreCapturedOCR(on rect: CGRect) {
         isCapturing = false
-
         guard let cropped = cropPreCapture(to: rect) else {
             ToastWindow.show("Capture failed")
             preCapturedImages = []
             smartReturnFocus()
             return
         }
-
-        preCapturedImages = [] // release memory
-
+        preCapturedImages = []
         OCREngine.recognizeText(in: cropped) { [weak self] text in
-            guard let self = self else { return }
+            guard let self else { return }
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.isEmpty {
-                ToastWindow.show("No text found")
-            } else {
+            if trimmed.isEmpty { ToastWindow.show("No text found") }
+            else {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(trimmed, forType: .string)
                 ToastWindow.show("Copied")
@@ -344,42 +332,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // MARK: SVG
+
     private func performSVGExtraction(on rect: CGRect) {
         let browserApp = previousApp
-
         SVGExtractor.extractSVGs(in: rect, from: browserApp) { [weak self] svgs in
-            guard let self = self else { return }
+            guard let self else { return }
             self.isCapturing = false
-
-            if svgs.isEmpty {
-                ToastWindow.show("No SVGs found")
-            } else {
+            if svgs.isEmpty { ToastWindow.show("No SVGs found") }
+            else {
                 SVGExtractor.copyToClipboard(svgs)
-                let label = svgs.count == 1 ? "1 SVG copied" : "\(svgs.count) SVGs copied"
-                ToastWindow.show(label)
+                ToastWindow.show(svgs.count == 1 ? "1 SVG copied" : "\(svgs.count) SVGs copied")
             }
-
             self.smartReturnFocus()
         }
     }
 
-    // MARK: Focus management
+    // MARK: Focus
 
     private func smartReturnFocus() {
         updateStatusLabel(nil)
-        // Only return focus if our app is still frontmost (user hasn't alt-tabbed away)
-        if NSApp.isActive {
-            previousApp?.activate()
-        }
+        if NSApp.isActive { previousApp?.activate() }
         previousApp = nil
     }
 
     // MARK: Menu Actions
 
+    @objc private func showWelcome() {
+        WelcomeWindowController.show()
+    }
+
     @objc private func restartApp() {
-        let executablePath = Bundle.main.executablePath!
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: executablePath)
+        process.executableURL = URL(fileURLWithPath: Bundle.main.executablePath!)
         try? process.run()
         NSApp.terminate(nil)
     }
@@ -401,8 +386,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.accessoryView = input
         NSApp.activate(ignoringOtherApps: true)
         if alert.runModal() == .alertFirstButtonReturn {
-            var hex = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            hex = hex.replacingOccurrences(of: "#", with: "")
+            var hex = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "#", with: "")
             if hex.count == 6, UInt64(hex, radix: 16) != nil {
                 UserDefaults.standard.set(hex.uppercased(), forKey: "highlightColorHex")
                 rebuildMenu()
@@ -410,24 +394,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc private func quitApp() {
-        NSApp.terminate(nil)
-    }
+    @objc private func quitApp() { NSApp.terminate(nil) }
 }
 
 // MARK: - NSColor HEX Extension
 
 extension NSColor {
     convenience init(hex: String) {
-        var hexStr = hex.trimmingCharacters(in: .whitespacesAndNewlines)
-        hexStr = hexStr.replacingOccurrences(of: "#", with: "")
+        var hexStr = hex.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "#", with: "")
         guard hexStr.count == 6, let val = UInt64(hexStr, radix: 16) else {
-            self.init(red: 1, green: 0.84, blue: 0.04, alpha: 1)
-            return
+            self.init(red: 1, green: 0.84, blue: 0.04, alpha: 1); return
         }
-        let r = CGFloat((val >> 16) & 0xFF) / 255.0
-        let g = CGFloat((val >> 8) & 0xFF) / 255.0
-        let b = CGFloat(val & 0xFF) / 255.0
-        self.init(red: r, green: g, blue: b, alpha: 1)
+        self.init(
+            red:   CGFloat((val >> 16) & 0xFF) / 255.0,
+            green: CGFloat((val >>  8) & 0xFF) / 255.0,
+            blue:  CGFloat( val        & 0xFF) / 255.0,
+            alpha: 1
+        )
     }
 }

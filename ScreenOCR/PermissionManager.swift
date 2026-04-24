@@ -1,4 +1,5 @@
 import Cocoa
+import ScreenCaptureKit
 
 final class PermissionManager {
 
@@ -8,13 +9,19 @@ final class PermissionManager {
         return CGPreflightScreenCaptureAccess()
     }
 
+    /// Call at every app launch — registers the app in "Screen & System Audio Recording"
+    /// via ScreenCaptureKit without showing any dialog.
+    static func registerWithScreenCaptureKit() {
+        SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: true) { _, _ in }
+    }
+
     @discardableResult
     static func requestScreenRecordingPermission() -> Bool {
-        let granted = CGRequestScreenCaptureAccess()
-        if !granted {
-            showRestartRequiredAlert()
-        }
-        return granted
+        // macOS 15+: ScreenCaptureKit registers the app in "Screen & System Audio Recording" list
+        registerWithScreenCaptureKit()
+        // Legacy API: shows the system prompt on older macOS
+        CGRequestScreenCaptureAccess()
+        return hasScreenRecordingPermission
     }
 
     static func showPermissionDeniedAlert() {
