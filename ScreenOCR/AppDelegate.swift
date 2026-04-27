@@ -23,7 +23,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMainMenu()
         setupStatusItem()
-        WelcomeWindowController.showIfNeeded()
         // Always register with ScreenCaptureKit so app appears in Screen & System Audio Recording list.
         // On macOS 15+, CGPreflightScreenCaptureAccess() may return true without registering in the new TCC list.
         PermissionManager.registerWithScreenCaptureKit()
@@ -83,12 +82,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
-        let permItem = NSMenuItem(title: "Permissions & Welcome…", action: #selector(showWelcome), keyEquivalent: "")
-        permItem.target = self
-        menu.addItem(permItem)
-
-        menu.addItem(.separator())
-
         let colorItem = NSMenuItem(title: "Highlight Color", action: nil, keyEquivalent: "")
         let colorSubmenu = NSMenu()
         let colors: [(String, String)] = [
@@ -109,10 +102,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item.image = swatch
             colorSubmenu.addItem(item)
         }
-        colorSubmenu.addItem(.separator())
-        let customItem = NSMenuItem(title: "Custom HEX...", action: #selector(setCustomHighlightColor), keyEquivalent: "")
-        customItem.target = self
-        colorSubmenu.addItem(customItem)
         colorItem.submenu = colorSubmenu
         menu.addItem(colorItem)
 
@@ -358,10 +347,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: Menu Actions
 
-    @objc private func showWelcome() {
-        WelcomeWindowController.show()
-    }
-
     @objc private func restartApp() {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: Bundle.main.executablePath!)
@@ -373,25 +358,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let hex = sender.representedObject as? String else { return }
         UserDefaults.standard.set(hex, forKey: "highlightColorHex")
         rebuildMenu()
-    }
-
-    @objc private func setCustomHighlightColor() {
-        let alert = NSAlert()
-        alert.messageText = "Enter HEX Color"
-        alert.informativeText = "Example: FF9F0A"
-        alert.addButton(withTitle: "OK")
-        alert.addButton(withTitle: "Cancel")
-        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
-        input.stringValue = UserDefaults.standard.string(forKey: "highlightColorHex") ?? "FFD60A"
-        alert.accessoryView = input
-        NSApp.activate(ignoringOtherApps: true)
-        if alert.runModal() == .alertFirstButtonReturn {
-            var hex = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "#", with: "")
-            if hex.count == 6, UInt64(hex, radix: 16) != nil {
-                UserDefaults.standard.set(hex.uppercased(), forKey: "highlightColorHex")
-                rebuildMenu()
-            }
-        }
     }
 
     @objc private func quitApp() { NSApp.terminate(nil) }
