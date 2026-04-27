@@ -363,16 +363,19 @@ final class SelectionView: NSView {
     private func drawDOMHUD(context: CGContext) {
         guard let el = hoveredDOMElement else { return }
 
-        // Highlight rectangle — DevTools-style filled overlay + outline
-        let fill = NSColor(deviceRed: 0.45, green: 0.65, blue: 0.95, alpha: 0.30).cgColor
-        let stroke = NSColor(deviceRed: 0.45, green: 0.65, blue: 0.95, alpha: 0.95).cgColor
-        context.saveGState()
-        context.setFillColor(fill)
-        context.fill(el.rect)
-        context.setStrokeColor(stroke)
-        context.setLineWidth(1.5)
-        context.stroke(el.rect)
-        context.restoreGState()
+        // Highlight rectangle — same yellow dashed style as OCR mode
+        let hex = UserDefaults.standard.string(forKey: "highlightColorHex") ?? "FFD60A"
+        let highlightColor = NSColor(hex: hex)
+        let dashPattern: [CGFloat] = [4.0, 4.0]
+        let cornerRadius: CGFloat = 4
+
+        highlightColor.setStroke()
+        let path = NSBezierPath(roundedRect: el.rect, xRadius: cornerRadius, yRadius: cornerRadius)
+        path.setLineDash(dashPattern, count: 2, phase: dashPhase)
+        path.lineWidth = 2.5
+        path.stroke()
+        highlightColor.withAlphaComponent(0.15).setFill()
+        NSBezierPath(roundedRect: el.rect, xRadius: cornerRadius, yRadius: cornerRadius).fill()
 
         // Label tooltip — tag.class.class — width × height
         let dim = "— \(Int(el.rect.width)) × \(Int(el.rect.height))"

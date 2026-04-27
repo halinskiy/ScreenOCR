@@ -186,14 +186,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.handleColorPicked(hex)
             }
             updateStatusLabel("HEX")
-            ToastWindow.show("Color Picker")
+            ToastWindow.show("HEX")
         case .hex:
             currentMode = .dom
             overlay.switchToDOMMode { [weak self] label in
                 self?.handleDOMElementPicked(label)
             }
             updateStatusLabel("DOM")
-            ToastWindow.show("Element Picker")
+            ToastWindow.show("DOM")
             DOMExtractor.getDOMElements(from: previousApp) { [weak self] elements in
                 guard let self else { return }
                 if elements.isEmpty {
@@ -208,7 +208,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             currentMode = .svg
             overlay.switchToSVGMode()
             updateStatusLabel("SVG")
-            ToastWindow.show("SVG Mode")
+            ToastWindow.show("SVG")
             SVGExtractor.getSVGBoundingBoxes(from: previousApp) { [weak self] boxes in
                 self?.overlay.setSVGBoxes(boxes)
             }
@@ -217,7 +217,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             overlay.switchToOCRMode()
             overlay.preScanWordBoxes(level: .fast, screenImages: screenImagesForOverlay)
             updateStatusLabel(nil)
-            ToastWindow.show("OCR Mode")
+            ToastWindow.show("OCR")
         }
     }
 
@@ -300,7 +300,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateStatusLabel(nil)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(label, forType: .string)
-        ToastWindow.show("Copied: \(label)")
+        ToastWindow.show(label)
         smartReturnFocus()
     }
 

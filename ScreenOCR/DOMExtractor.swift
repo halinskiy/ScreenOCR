@@ -1,25 +1,27 @@
 import Cocoa
+import ApplicationServices
 
 final class DOMExtractor {
 
     struct Element {
-        let rect: CGRect    // CG coords (screen, top-left origin)
+        let rect: CGRect    // CG coords (screen, top-left origin, logical points)
         let label: String   // tag.class.class — DevTools-style selector
     }
 
     // MARK: - Public
 
     static func getDOMElements(from app: NSRunningApplication?, completion: @escaping ([Element]) -> Void) {
-        guard let browser = detectBrowser(app) else {
+        guard let app = app, let browser = detectBrowser(app) else {
             DispatchQueue.main.async { completion([]) }
             return
         }
 
+        // JS returns viewport-local CSS-pixel rects. The screen translation happens
+        // in Swift via Accessibility — far more robust than computing chrome offsets
+        // from window.screenY/outerHeight, which break under DevTools responsive
+        // mode, page zoom != 100%, browsers with side chrome (Arc), etc.
         let js = """
         (function(){
-        var z=window.outerWidth/window.innerWidth;
-        var ch=window.outerHeight-window.innerHeight*z;
-        var sx=window.screenX,sy=window.screenY;
         var R=[],MAX=2000;
         function sel(el){
         var t=(el.tagName||'').toLowerCase();if(!t)return '';
@@ -44,19 +46,83 @@ final class DOMExtractor {
         var cs=getComputedStyle(el);
         if(cs.display==='none'||cs.visibility==='hidden'||parseFloat(cs.opacity)===0)continue;
         var s=sel(el);if(!s)continue;
-        R.push([sx+r.left*z,sy+ch+r.top*z,r.width*z,r.height*z,s]);}
+        R.push([r.left,r.top,r.width,r.height,s]);}
         return JSON.stringify(R);})()
         """
 
         let source = appleScript(browser: browser, js: js)
+        let contentFrame = browserContentFrame(of: app)
 
         DispatchQueue.global(qos: .userInitiated).async {
-            let elements = runElements(source)
+            let viewportRects = runViewportRects(source)
+            let elements: [Element]
+            if let cf = contentFrame {
+                elements = viewportRects.map { vr in
+                    Element(
+                        rect: CGRect(
+                            x: cf.origin.x + vr.x,
+                            y: cf.origin.y + vr.y,
+                            width: vr.width,
+                            height: vr.height
+                        ),
+                        label: vr.label
+                    )
+                }
+            } else {
+                elements = []
+            }
             DispatchQueue.main.async { completion(elements) }
         }
     }
 
-    // MARK: - Browser bridge (mirrors SVGExtractor — kept independent to avoid coupling)
+    // MARK: - Accessibility: browser content area frame
+
+    /// Returns the content-area frame (where the page renders) in CG screen coords —
+    /// top-left origin, logical points. Walks the AX hierarchy for AXWebArea (Safari)
+    /// or AXScrollArea (Chromium). Falls back to the focused window frame.
+    private static func browserContentFrame(of app: NSRunningApplication) -> CGRect? {
+        let appAX = AXUIElementCreateApplication(app.processIdentifier)
+        var focused: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(appAX, kAXFocusedWindowAttribute as CFString, &focused) == .success,
+              let f = focused, CFGetTypeID(f) == AXUIElementGetTypeID() else { return nil }
+        let window = f as! AXUIElement
+
+        if let webArea = findContentArea(in: window, depth: 0), let frame = axFrame(of: webArea) {
+            return frame
+        }
+        return axFrame(of: window)
+    }
+
+    private static func findContentArea(in element: AXUIElement, depth: Int) -> AXUIElement? {
+        if depth > 10 { return nil }
+        var roleVal: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleVal)
+        if let role = roleVal as? String, role == "AXWebArea" || role == "AXScrollArea" {
+            return element
+        }
+        var children: CFTypeRef?
+        if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &children) == .success,
+           let arr = children as? [AXUIElement] {
+            for child in arr {
+                if let found = findContentArea(in: child, depth: depth + 1) { return found }
+            }
+        }
+        return nil
+    }
+
+    private static func axFrame(of element: AXUIElement) -> CGRect? {
+        var posVal: CFTypeRef?
+        var sizeVal: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posVal) == .success,
+              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeVal) == .success
+        else { return nil }
+        var pos = CGPoint.zero, size = CGSize.zero
+        AXValueGetValue(posVal as! AXValue, .cgPoint, &pos)
+        AXValueGetValue(sizeVal as! AXValue, .cgSize, &size)
+        return CGRect(origin: pos, size: size)
+    }
+
+    // MARK: - Browser detection (mirrors SVGExtractor — independent on purpose)
 
     private enum Browser {
         case safari
@@ -127,7 +193,12 @@ final class DOMExtractor {
         }
     }
 
-    private static func runElements(_ source: String) -> [Element] {
+    private struct ViewportRect {
+        let x, y, width, height: CGFloat
+        let label: String
+    }
+
+    private static func runViewportRects(_ source: String) -> [ViewportRect] {
         guard let script = NSAppleScript(source: source) else { return [] }
         var error: NSDictionary?
         let result = script.executeAndReturnError(&error)
@@ -142,7 +213,7 @@ final class DOMExtractor {
                   let w = (item[2] as? Double) ?? (item[2] as? Int).map(Double.init),
                   let h = (item[3] as? Double) ?? (item[3] as? Int).map(Double.init),
                   let label = item[4] as? String else { return nil }
-            return Element(rect: CGRect(x: x, y: y, width: w, height: h), label: label)
+            return ViewportRect(x: CGFloat(x), y: CGFloat(y), width: CGFloat(w), height: CGFloat(h), label: label)
         }
     }
 }
