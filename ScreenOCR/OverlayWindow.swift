@@ -234,18 +234,18 @@ final class SelectionView: NSView {
         let gap: CGFloat = 10
         let totalHeight: CGFloat = 44
 
-        // Use concrete device colors — macOS 26 catalog/dynamic colors crash Core Text
-        let white   = NSColor(deviceRed: 1, green: 1, blue: 1, alpha: 1)
-        let dimmed  = NSColor(deviceRed: 1, green: 1, blue: 1, alpha: 0.55)
+        // macOS 26: lazy CTFont descriptors from monospacedSystemFont can yield nil-attr
+        // entries that crash CTLineCreate during string drawing under low-power/throttled
+        // conditions. Build CTLines from named CTFonts directly — no system-font lookup.
+        let white  = NSColor(deviceRed: 1, green: 1, blue: 1, alpha: 1).cgColor
+        let dimmed = NSColor(deviceRed: 1, green: 1, blue: 1, alpha: 0.55).cgColor
 
-        let hexFont = NSFont.monospacedSystemFont(ofSize: 14, weight: .medium)
-        let nameFont = NSFont.systemFont(ofSize: 12, weight: .regular)
-        let hexAttrs: [NSAttributedString.Key: Any]  = [.font: hexFont,  .foregroundColor: white]
-        let nameAttrs: [NSAttributedString.Key: Any] = [.font: nameFont, .foregroundColor: dimmed]
+        let hexLine  = SelectionView.makeCTLine(hexStr, font: SelectionView.hexFont,  color: white)
+        let nameLine = SelectionView.makeCTLine(name,   font: SelectionView.nameFont, color: dimmed)
+        let hexBounds  = CTLineGetBoundsWithOptions(hexLine,  [])
+        let nameBounds = CTLineGetBoundsWithOptions(nameLine, [])
 
-        let hexSize = (hexStr as NSString).size(withAttributes: hexAttrs)
-        let nameSize = (name as NSString).size(withAttributes: nameAttrs)
-        let totalWidth = hPad + swatchSize + gap + hexSize.width + gap + nameSize.width + hPad
+        let totalWidth = hPad + swatchSize + gap + hexBounds.width + gap + nameBounds.width + hPad
 
         // Position: prefer top-right of cursor, clamp to screen
         var x = hexPoint.x + 18
@@ -260,7 +260,7 @@ final class SelectionView: NSView {
         context.saveGState()
         let bgPath = CGPath(roundedRect: bgRect, cornerWidth: totalHeight / 2, cornerHeight: totalHeight / 2, transform: nil)
         context.addPath(bgPath)
-        context.setFillColor(NSColor.black.withAlphaComponent(0.82).cgColor)
+        context.setFillColor(NSColor(deviceRed: 0, green: 0, blue: 0, alpha: 0.82).cgColor)
         context.fillPath()
         context.restoreGState()
 
@@ -278,13 +278,39 @@ final class SelectionView: NSView {
 
         // HEX text
         let textBaseX = swatchX + swatchSize + gap
-        let hexY = y + (totalHeight - hexSize.height) / 2
-        (hexStr as NSString).draw(at: NSPoint(x: textBaseX, y: hexY), withAttributes: hexAttrs)
+        let hexY = y + (totalHeight - hexBounds.height) / 2 - hexBounds.minY
+        context.textPosition = CGPoint(x: textBaseX, y: hexY)
+        CTLineDraw(hexLine, context)
 
         // Color name
-        let nameX = textBaseX + hexSize.width + gap
-        let nameY = y + (totalHeight - nameSize.height) / 2
-        (name as NSString).draw(at: NSPoint(x: nameX, y: nameY), withAttributes: nameAttrs)
+        let nameX = textBaseX + hexBounds.width + gap
+        let nameY = y + (totalHeight - nameBounds.height) / 2 - nameBounds.minY
+        context.textPosition = CGPoint(x: nameX, y: nameY)
+        CTLineDraw(nameLine, context)
+    }
+
+    // Concrete named fonts — never go through monospacedSystemFont/systemFont, whose
+    // lazy descriptors can return nil internal attrs on macOS 26 and crash CT.
+    private static let hexFont: CTFont = {
+        if let f = CGFont("Menlo-Bold" as CFString) { return CTFontCreateWithGraphicsFont(f, 14, nil, nil) }
+        return CTFontCreateWithName("Menlo" as CFString, 14, nil)
+    }()
+    private static let nameFont: CTFont = {
+        if let f = CGFont("Helvetica" as CFString) { return CTFontCreateWithGraphicsFont(f, 12, nil, nil) }
+        return CTFontCreateWithName("Helvetica" as CFString, 12, nil)
+    }()
+    private static let sizeLabelFont: CTFont = {
+        if let f = CGFont("Menlo-Regular" as CFString) { return CTFontCreateWithGraphicsFont(f, 12, nil, nil) }
+        return CTFontCreateWithName("Menlo" as CFString, 12, nil)
+    }()
+
+    private static func makeCTLine(_ string: String, font: CTFont, color: CGColor) -> CTLine {
+        let attrs: [NSAttributedString.Key: Any] = [
+            kCTFontAttributeName as NSAttributedString.Key: font,
+            kCTForegroundColorAttributeName as NSAttributedString.Key: color
+        ]
+        let attrString = NSAttributedString(string: string, attributes: attrs)
+        return CTLineCreateWithAttributedString(attrString as CFAttributedString)
     }
 
     // MARK: Color helpers
@@ -369,24 +395,27 @@ final class SelectionView: NSView {
     }
 
     private func drawSizeLabel(context: CGContext) {
-        let label = "\(Int(selectionRect.width)) × \(Int(selectionRect.height))" as NSString
-        // Use concrete device colors — macOS 26 catalog/dynamic colors crash Core Text
-        let white = NSColor(deviceRed: 1, green: 1, blue: 1, alpha: 1)
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .medium),
-            .foregroundColor: white
-        ]
-        let size = label.size(withAttributes: attrs)
+        let label = "\(Int(selectionRect.width)) × \(Int(selectionRect.height))"
+        let white = NSColor(deviceRed: 1, green: 1, blue: 1, alpha: 1).cgColor
+        let line = SelectionView.makeCTLine(label, font: SelectionView.sizeLabelFont, color: white)
+        let textBounds = CTLineGetBoundsWithOptions(line, [])
+
         let padding: CGFloat = 6
         let bgRect = CGRect(
-            x: selectionRect.midX - (size.width + padding * 2) / 2,
-            y: selectionRect.minY - size.height - padding * 2 - 4,
-            width: size.width + padding * 2, height: size.height + padding * 2
+            x: selectionRect.midX - (textBounds.width + padding * 2) / 2,
+            y: selectionRect.minY - textBounds.height - padding * 2 - 4,
+            width: textBounds.width + padding * 2,
+            height: textBounds.height + padding * 2
         )
-        context.setFillColor(NSColor.black.withAlphaComponent(0.7).cgColor)
+        context.setFillColor(NSColor(deviceRed: 0, green: 0, blue: 0, alpha: 0.7).cgColor)
         context.addPath(CGPath(roundedRect: bgRect, cornerWidth: 4, cornerHeight: 4, transform: nil))
         context.fillPath()
-        label.draw(at: NSPoint(x: bgRect.origin.x + padding, y: bgRect.origin.y + padding), withAttributes: attrs)
+
+        context.textPosition = CGPoint(
+            x: bgRect.minX + padding - textBounds.minX,
+            y: bgRect.minY + padding - textBounds.minY
+        )
+        CTLineDraw(line, context)
     }
 }
 
