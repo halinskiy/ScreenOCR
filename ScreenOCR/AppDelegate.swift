@@ -3,7 +3,7 @@ import Sparkle
 
 // MARK: - Capture Mode
 
-enum CaptureMode { case ocr, svg, hex }
+enum CaptureMode { case ocr, svg, hex, dom }
 
 // MARK: - App Delegate
 
@@ -188,6 +188,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             updateStatusLabel("HEX")
             ToastWindow.show("Color Picker")
         case .hex:
+            currentMode = .dom
+            overlay.switchToDOMMode { [weak self] label in
+                self?.handleDOMElementPicked(label)
+            }
+            updateStatusLabel("DOM")
+            ToastWindow.show("Element Picker")
+            DOMExtractor.getDOMElements(from: previousApp) { [weak self] elements in
+                guard let self else { return }
+                if elements.isEmpty {
+                    ToastWindow.show("Open in Safari/Chrome")
+                    self.cancelCapture()
+                    self.overlay.dismiss()
+                    return
+                }
+                self.overlay.setDOMElements(elements)
+            }
+        case .dom:
             currentMode = .svg
             overlay.switchToSVGMode()
             updateStatusLabel("SVG")
@@ -241,6 +258,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.updateStatusLabel(nil)
                 self?.cancelCapture()
             })
+
+        case .dom:
+            updateStatusLabel("DOM")
+            overlay.showForDOM(screenImages: screenImagesForOverlay, onElementPicked: { [weak self] label in
+                self?.handleDOMElementPicked(label)
+            }, onCancel: { [weak self] in
+                self?.updateStatusLabel(nil)
+                self?.cancelCapture()
+            })
+            DOMExtractor.getDOMElements(from: previousApp) { [weak self] elements in
+                guard let self else { return }
+                if elements.isEmpty {
+                    ToastWindow.show("Open in Safari/Chrome")
+                    self.cancelCapture()
+                    self.overlay.dismiss()
+                    return
+                }
+                self.overlay.setDOMElements(elements)
+            }
         }
     }
 
@@ -259,10 +295,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         smartReturnFocus()
     }
 
+    private func handleDOMElementPicked(_ label: String) {
+        isCapturing = false
+        updateStatusLabel(nil)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(label, forType: .string)
+        ToastWindow.show("Copied: \(label)")
+        smartReturnFocus()
+    }
+
     private func handleCaptureComplete(_ cgRect: CGRect) {
         switch currentMode {
         case .svg: performSVGExtraction(on: cgRect)
         case .ocr, .hex: performPreCapturedOCR(on: cgRect)
+        case .dom: break // DOM mode picks via onElementPicked, never triggers onComplete
         }
     }
 

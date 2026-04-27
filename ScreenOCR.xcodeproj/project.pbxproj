@@ -16,6 +16,7 @@
 		AA0000000000000000000009 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000009 /* Assets.xcassets */; };
 		AA0000000000000000000011 /* ToastWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000011 /* ToastWindow.swift */; };
 		AA0000000000000000000012 /* SVGExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000012 /* SVGExtractor.swift */; };
+		AA0000000000000000000014 /* DOMExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000014 /* DOMExtractor.swift */; };
 		AA0000000000000000000020 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = SP0000000000000000000002 /* Sparkle */; };
 /* End PBXBuildFile section */
 
@@ -31,6 +32,7 @@
 		BB000000000000000000000B /* ScreenOCR.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ScreenOCR.entitlements; sourceTree = "<group>"; };
 		BB0000000000000000000011 /* ToastWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToastWindow.swift; sourceTree = "<group>"; };
 		BB0000000000000000000012 /* SVGExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SVGExtractor.swift; sourceTree = "<group>"; };
+		BB0000000000000000000014 /* DOMExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DOMExtractor.swift; sourceTree = "<group>"; };
 		BB000000000000000000000C /* ScreenOCR.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ScreenOCR.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -65,6 +67,7 @@
 				BB0000000000000000000008 /* PermissionManager.swift */,
 				BB0000000000000000000011 /* ToastWindow.swift */,
 				BB0000000000000000000012 /* SVGExtractor.swift */,
+				BB0000000000000000000014 /* DOMExtractor.swift */,
 				BB0000000000000000000009 /* Assets.xcassets */,
 				BB000000000000000000000A /* Info.plist */,
 				BB000000000000000000000B /* ScreenOCR.entitlements */,
@@ -157,6 +160,7 @@
 				AA0000000000000000000008 /* PermissionManager.swift in Sources */,
 				AA0000000000000000000011 /* ToastWindow.swift in Sources */,
 				AA0000000000000000000012 /* SVGExtractor.swift in Sources */,
+				AA0000000000000000000014 /* DOMExtractor.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

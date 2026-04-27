@@ -1,14 +1,21 @@
 import Cocoa
 import Vision
 
+struct DOMElementBox {
+    let rect: CGRect    // view-local coords
+    let label: String
+}
+
 // MARK: - Selection View
 
 final class SelectionView: NSView {
     var onComplete: ((CGRect) -> Void)?
     var onCancel: (() -> Void)?
     var onColorPicked: ((String) -> Void)?
+    var onDOMElementPicked: ((String) -> Void)?
     var isSVGMode = false
     var isHEXMode = false
+    var isDOMMode = false
     var backgroundImage: CGImage?
 
     private var startPoint: NSPoint = .zero
@@ -25,8 +32,13 @@ final class SelectionView: NSView {
     private var hexPoint: NSPoint = .zero
     private var hexColor: NSColor?
 
+    // DOM mode state
+    private var domPoint: NSPoint = .zero
+    private var hoveredDOMElement: DOMElementBox?
+
     var screenWordBoxes: [CGRect] = []
     var screenSVGBoxes: [CGRect] = []
+    var screenDOMElements: [DOMElementBox] = []
 
     override var acceptsFirstResponder: Bool { true }
 
@@ -74,17 +86,33 @@ final class SelectionView: NSView {
             needsDisplay = true
             return
         }
+        if isDOMMode {
+            domPoint = point
+            hoveredDOMElement = pickDeepestDOMElement(at: point)
+            needsDisplay = true
+            return
+        }
         guard !isSelecting else { return }
         hoveredBox = activeBoxes.first(where: { $0.contains(point) })
         needsDisplay = true
     }
 
     override func mouseDown(with event: NSEvent) {
-        if isHEXMode { return }
+        if isHEXMode || isDOMMode { return }
         startPoint = convert(event.locationInWindow, from: nil)
         selectionRect = .zero
         isSelecting = true
         isDragging = false
+    }
+
+    private func pickDeepestDOMElement(at point: NSPoint) -> DOMElementBox? {
+        var best: DOMElementBox? = nil
+        var bestArea: CGFloat = .greatestFiniteMagnitude
+        for el in screenDOMElements where el.rect.contains(point) {
+            let area = el.rect.width * el.rect.height
+            if area < bestArea { best = el; bestArea = area }
+        }
+        return best
     }
 
     private var spaceDown: Bool {
@@ -96,6 +124,12 @@ final class SelectionView: NSView {
         if isHEXMode {
             hexPoint = current
             hexColor = sampleColor(at: current)
+            needsDisplay = true
+            return
+        }
+        if isDOMMode {
+            domPoint = current
+            hoveredDOMElement = pickDeepestDOMElement(at: current)
             needsDisplay = true
             return
         }
@@ -132,6 +166,15 @@ final class SelectionView: NSView {
             let color = hexColor ?? sampleColor(at: point)
             if let color = color {
                 onColorPicked?(hexString(for: color))
+            } else {
+                onCancel?()
+            }
+            return
+        }
+        if isDOMMode {
+            let point = convert(event.locationInWindow, from: nil)
+            if let el = pickDeepestDOMElement(at: point) {
+                onDOMElementPicked?(el.label)
             } else {
                 onCancel?()
             }
@@ -182,6 +225,11 @@ final class SelectionView: NSView {
 
         if isHEXMode {
             drawHEXHUD(context: context)
+            return
+        }
+
+        if isDOMMode {
+            drawDOMHUD(context: context)
             return
         }
 
@@ -303,6 +351,70 @@ final class SelectionView: NSView {
         if let f = CGFont("Menlo-Regular" as CFString) { return CTFontCreateWithGraphicsFont(f, 12, nil, nil) }
         return CTFontCreateWithName("Menlo" as CFString, 12, nil)
     }()
+    fileprivate static let domLabelFont: CTFont = {
+        if let f = CGFont("Menlo-Regular" as CFString) { return CTFontCreateWithGraphicsFont(f, 12, nil, nil) }
+        return CTFontCreateWithName("Menlo" as CFString, 12, nil)
+    }()
+    fileprivate static let domDimFont: CTFont = {
+        if let f = CGFont("Menlo-Regular" as CFString) { return CTFontCreateWithGraphicsFont(f, 11, nil, nil) }
+        return CTFontCreateWithName("Menlo" as CFString, 11, nil)
+    }()
+
+    private func drawDOMHUD(context: CGContext) {
+        guard let el = hoveredDOMElement else { return }
+
+        // Highlight rectangle — DevTools-style filled overlay + outline
+        let fill = NSColor(deviceRed: 0.45, green: 0.65, blue: 0.95, alpha: 0.30).cgColor
+        let stroke = NSColor(deviceRed: 0.45, green: 0.65, blue: 0.95, alpha: 0.95).cgColor
+        context.saveGState()
+        context.setFillColor(fill)
+        context.fill(el.rect)
+        context.setStrokeColor(stroke)
+        context.setLineWidth(1.5)
+        context.stroke(el.rect)
+        context.restoreGState()
+
+        // Label tooltip — tag.class.class — width × height
+        let dim = "— \(Int(el.rect.width)) × \(Int(el.rect.height))"
+        let white = NSColor(deviceRed: 1, green: 1, blue: 1, alpha: 1).cgColor
+        let dimColor = NSColor(deviceRed: 1, green: 1, blue: 1, alpha: 0.6).cgColor
+
+        let labelLine = SelectionView.makeCTLine(el.label, font: SelectionView.domLabelFont, color: white)
+        let dimLine   = SelectionView.makeCTLine(dim,      font: SelectionView.domDimFont,   color: dimColor)
+        let labelBounds = CTLineGetBoundsWithOptions(labelLine, [])
+        let dimBounds   = CTLineGetBoundsWithOptions(dimLine,   [])
+
+        let hPad: CGFloat = 8
+        let vPad: CGFloat = 6
+        let gap: CGFloat = 8
+        let totalWidth = hPad + labelBounds.width + gap + dimBounds.width + hPad
+        let totalHeight = vPad * 2 + max(labelBounds.height, dimBounds.height)
+
+        // Position below the element if room, otherwise above
+        let preferBelow = (el.rect.minY - totalHeight - 4) > 8
+        var x = el.rect.minX
+        var y = preferBelow ? (el.rect.minY - totalHeight - 4) : (el.rect.maxY + 4)
+        if x + totalWidth > bounds.width - 8 { x = bounds.width - totalWidth - 8 }
+        if y < 8 { y = 8 }
+        if y + totalHeight > bounds.height - 8 { y = bounds.height - totalHeight - 8 }
+        x = max(8, x)
+
+        let bgRect = CGRect(x: x, y: y, width: totalWidth, height: totalHeight)
+        context.saveGState()
+        context.addPath(CGPath(roundedRect: bgRect, cornerWidth: 4, cornerHeight: 4, transform: nil))
+        context.setFillColor(NSColor(deviceRed: 0.10, green: 0.12, blue: 0.16, alpha: 0.95).cgColor)
+        context.fillPath()
+        context.restoreGState()
+
+        let labelY = y + (totalHeight - labelBounds.height) / 2 - labelBounds.minY
+        context.textPosition = CGPoint(x: x + hPad, y: labelY)
+        CTLineDraw(labelLine, context)
+
+        let dimX = x + hPad + labelBounds.width + gap
+        let dimY = y + (totalHeight - dimBounds.height) / 2 - dimBounds.minY
+        context.textPosition = CGPoint(x: dimX, y: dimY)
+        CTLineDraw(dimLine, context)
+    }
 
     private static func makeCTLine(_ string: String, font: CTFont, color: CGColor) -> CTLine {
         let attrs: [NSAttributedString.Key: Any] = [
@@ -455,6 +567,17 @@ final class OverlayWindow {
         }
     }
 
+    func showForDOM(screenImages: [(displayID: CGDirectDisplayID, image: CGImage)], onElementPicked: @escaping (String) -> Void, onCancel: @escaping () -> Void) {
+        showOverlay(isSVG: false, screenImages: screenImages, onComplete: { _ in }, onCancel: onCancel, immediate: true)
+        let handler = wrappedDOMElementPicked(onElementPicked)
+        for window in windows {
+            if let view = window.contentView as? SelectionView {
+                view.isDOMMode = true
+                view.onDOMElementPicked = handler
+            }
+        }
+    }
+
     // MARK: Mode switching (mid-capture)
 
     func switchToOCRMode() {
@@ -462,7 +585,9 @@ final class OverlayWindow {
             guard let view = window.contentView as? SelectionView else { continue }
             view.isSVGMode = false
             view.isHEXMode = false
+            view.isDOMMode = false
             view.onColorPicked = nil
+            view.onDOMElementPicked = nil
             view.needsDisplay = true
         }
     }
@@ -472,7 +597,9 @@ final class OverlayWindow {
             guard let view = window.contentView as? SelectionView else { continue }
             view.isSVGMode = true
             view.isHEXMode = false
+            view.isDOMMode = false
             view.onColorPicked = nil
+            view.onDOMElementPicked = nil
             view.needsDisplay = true
         }
     }
@@ -483,7 +610,22 @@ final class OverlayWindow {
             guard let view = window.contentView as? SelectionView else { continue }
             view.isSVGMode = false
             view.isHEXMode = true
+            view.isDOMMode = false
             view.onColorPicked = handler
+            view.onDOMElementPicked = nil
+            view.needsDisplay = true
+        }
+    }
+
+    func switchToDOMMode(onElementPicked: @escaping (String) -> Void) {
+        let handler = wrappedDOMElementPicked(onElementPicked)
+        for window in windows {
+            guard let view = window.contentView as? SelectionView else { continue }
+            view.isSVGMode = false
+            view.isHEXMode = false
+            view.isDOMMode = true
+            view.onColorPicked = nil
+            view.onDOMElementPicked = handler
             view.needsDisplay = true
         }
     }
@@ -492,6 +634,13 @@ final class OverlayWindow {
         return { [weak self] hex in
             self?.dismiss()
             onColorPicked(hex)
+        }
+    }
+
+    private func wrappedDOMElementPicked(_ onElementPicked: @escaping (String) -> Void) -> (String) -> Void {
+        return { [weak self] label in
+            self?.dismiss()
+            onElementPicked(label)
         }
     }
 
@@ -543,6 +692,23 @@ final class OverlayWindow {
                     y: mainH - cg.origin.y - cg.height - screen.frame.origin.y,
                     width: cg.width, height: cg.height
                 ).insetBy(dx: -6, dy: -4)
+            }
+            view.needsDisplay = true
+        }
+    }
+
+    func setDOMElements(_ elements: [DOMExtractor.Element]) {
+        let mainH = CGDisplayBounds(CGMainDisplayID()).height
+        for window in windows {
+            guard let view = window.contentView as? SelectionView else { continue }
+            let screen = window.screen ?? NSScreen.main!
+            view.screenDOMElements = elements.map { el in
+                let viewRect = CGRect(
+                    x: el.rect.origin.x - screen.frame.origin.x,
+                    y: mainH - el.rect.origin.y - el.rect.height - screen.frame.origin.y,
+                    width: el.rect.width, height: el.rect.height
+                )
+                return DOMElementBox(rect: viewRect, label: el.label)
             }
             view.needsDisplay = true
         }
