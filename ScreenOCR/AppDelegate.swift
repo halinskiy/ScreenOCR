@@ -3,7 +3,31 @@ import Sparkle
 
 // MARK: - Capture Mode
 
-enum CaptureMode { case ocr, svg, hex, dom }
+enum CaptureMode: String, CaseIterable {
+    case ocr, hex, dom, svg
+    var displayName: String { rawValue.uppercased() }
+}
+
+// MARK: - Enabled Modes Storage
+
+private enum EnabledModesStore {
+    private static let key = "enabledModes"
+    private static let canonicalOrder: [CaptureMode] = [.ocr, .hex, .dom, .svg]
+
+    static func load() -> [CaptureMode] {
+        let raw = UserDefaults.standard.array(forKey: key) as? [String]
+        let modes = (raw ?? canonicalOrder.map { $0.rawValue })
+            .compactMap(CaptureMode.init(rawValue:))
+        let unique = canonicalOrder.filter { modes.contains($0) }
+        return unique.isEmpty ? [.ocr] : unique
+    }
+
+    static func save(_ modes: [CaptureMode]) {
+        let canonical = canonicalOrder.filter { modes.contains($0) }
+        let final = canonical.isEmpty ? [CaptureMode.ocr] : canonical
+        UserDefaults.standard.set(final.map { $0.rawValue }, forKey: key)
+    }
+}
 
 // MARK: - App Delegate
 
@@ -75,10 +99,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func rebuildMenu() {
         let menu = NSMenu()
         menu.minimumWidth = 280
+        menu.autoenablesItems = false
 
-        let captureItem = NSMenuItem(title: "Capture  ⌘⇧1", action: #selector(handleCaptureHotkey), keyEquivalent: "")
-        captureItem.target = self
-        menu.addItem(captureItem)
+        let enabled = EnabledModesStore.load()
+        let canDisable = enabled.count > 1
+        for mode in CaptureMode.allCases {
+            let isOn = enabled.contains(mode)
+            let item = NSMenuItem(title: mode.displayName, action: #selector(toggleMode(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = mode.rawValue
+            item.state = isOn ? .on : .off
+            if isOn && !canDisable { item.isEnabled = false }
+            menu.addItem(item)
+        }
 
         menu.addItem(.separator())
 
@@ -112,10 +145,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(updateItem)
 
         menu.addItem(.separator())
-
-        let restartItem = NSMenuItem(title: "Restart", action: #selector(restartApp), keyEquivalent: "r")
-        restartItem.target = self
-        menu.addItem(restartItem)
 
         let quitItem = NSMenuItem(title: "Quit", action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
@@ -173,22 +202,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if isCapturing {
             cycleMode()
         } else {
-            currentMode = .ocr
+            currentMode = EnabledModesStore.load().first ?? .ocr
             startCapture()
         }
     }
 
     private func cycleMode() {
-        switch currentMode {
+        let enabled = EnabledModesStore.load()
+        guard !enabled.isEmpty else { return }
+        let idx = enabled.firstIndex(of: currentMode) ?? -1
+        let next = enabled[(idx + 1) % enabled.count]
+        switchActiveCaptureMode(to: next)
+    }
+
+    private func switchActiveCaptureMode(to mode: CaptureMode) {
+        currentMode = mode
+        switch mode {
         case .ocr:
-            currentMode = .hex
+            overlay.switchToOCRMode()
+            overlay.preScanWordBoxes(level: .fast, screenImages: screenImagesForOverlay)
+            updateStatusLabel(nil)
+            ToastWindow.show("OCR")
+        case .hex:
             overlay.switchToHEXMode { [weak self] hex in
                 self?.handleColorPicked(hex)
             }
             updateStatusLabel("HEX")
             ToastWindow.show("HEX")
-        case .hex:
-            currentMode = .dom
+        case .dom:
             overlay.switchToDOMMode { [weak self] label in
                 self?.handleDOMElementPicked(label)
             }
@@ -204,20 +245,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 self.overlay.setDOMElements(elements)
             }
-        case .dom:
-            currentMode = .svg
+        case .svg:
             overlay.switchToSVGMode()
             updateStatusLabel("SVG")
             ToastWindow.show("SVG")
             SVGExtractor.getSVGBoundingBoxes(from: previousApp) { [weak self] boxes in
                 self?.overlay.setSVGBoxes(boxes)
             }
-        case .svg:
-            currentMode = .ocr
-            overlay.switchToOCRMode()
-            overlay.preScanWordBoxes(level: .fast, screenImages: screenImagesForOverlay)
-            updateStatusLabel(nil)
-            ToastWindow.show("OCR")
         }
     }
 
@@ -393,11 +427,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: Menu Actions
 
-    @objc private func restartApp() {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: Bundle.main.executablePath!)
-        try? process.run()
-        NSApp.terminate(nil)
+    @objc private func toggleMode(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let mode = CaptureMode(rawValue: raw) else { return }
+        var enabled = EnabledModesStore.load()
+        if enabled.contains(mode) {
+            guard enabled.count > 1 else { return }
+            enabled.removeAll { $0 == mode }
+        } else {
+            enabled.append(mode)
+        }
+        EnabledModesStore.save(enabled)
+        rebuildMenu()
     }
 
     @objc private func setHighlightColor(_ sender: NSMenuItem) {
