@@ -41,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var preCapturedImages: [(displayID: CGDirectDisplayID, bounds: CGRect, image: CGImage)] = []
 
     private let updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+    private var modeTogglesView: ModeTogglesView?
 
     // MARK: Lifecycle
 
@@ -99,19 +100,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func rebuildMenu() {
         let menu = NSMenu()
         menu.minimumWidth = 280
-        menu.autoenablesItems = false
 
-        let enabled = EnabledModesStore.load()
-        let canDisable = enabled.count > 1
-        for mode in CaptureMode.allCases {
-            let isOn = enabled.contains(mode)
-            let item = NSMenuItem(title: mode.displayName, action: #selector(toggleMode(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = mode.rawValue
-            item.state = isOn ? .on : .off
-            if isOn && !canDisable { item.isEnabled = false }
-            menu.addItem(item)
+        let togglesItem = NSMenuItem()
+        let togglesView = ModeTogglesView(enabled: EnabledModesStore.load()) { [weak self] mode in
+            self?.toggleMode(mode)
         }
+        togglesItem.view = togglesView
+        modeTogglesView = togglesView
+        menu.addItem(togglesItem)
 
         menu.addItem(.separator())
 
@@ -427,9 +423,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: Menu Actions
 
-    @objc private func toggleMode(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String,
-              let mode = CaptureMode(rawValue: raw) else { return }
+    private func toggleMode(_ mode: CaptureMode) {
         var enabled = EnabledModesStore.load()
         if enabled.contains(mode) {
             guard enabled.count > 1 else { return }
@@ -438,7 +432,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             enabled.append(mode)
         }
         EnabledModesStore.save(enabled)
-        rebuildMenu()
+        modeTogglesView?.update(enabled: enabled)
     }
 
     @objc private func setHighlightColor(_ sender: NSMenuItem) {
@@ -448,6 +442,132 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func quitApp() { NSApp.terminate(nil) }
+}
+
+// MARK: - Mode Toggles View
+
+final class ModeTogglesView: NSView {
+    private let onToggle: (CaptureMode) -> Void
+    private var enabledModes: Set<CaptureMode>
+    private var hoveredIndex: Int? = nil
+
+    private static let squareSize = NSSize(width: 60, height: 36)
+    private static let gap: CGFloat = 6
+    private static let hPadding: CGFloat = 10
+    private static let vPadding: CGFloat = 8
+
+    private static let labelFont: CTFont = {
+        if let f = CGFont("Helvetica-Bold" as CFString) {
+            return CTFontCreateWithGraphicsFont(f, 12, nil, nil)
+        }
+        return CTFontCreateWithName("Helvetica" as CFString, 12, nil)
+    }()
+
+    init(enabled: [CaptureMode], onToggle: @escaping (CaptureMode) -> Void) {
+        self.enabledModes = Set(enabled)
+        self.onToggle = onToggle
+        let count = CGFloat(CaptureMode.allCases.count)
+        let width = Self.hPadding * 2 + count * Self.squareSize.width + (count - 1) * Self.gap
+        let height = Self.vPadding * 2 + Self.squareSize.height
+        super.init(frame: NSRect(x: 0, y: 0, width: width, height: height))
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
+
+    func update(enabled: [CaptureMode]) {
+        enabledModes = Set(enabled)
+        needsDisplay = true
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas { removeTrackingArea(area) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.activeAlways, .mouseMoved, .mouseEnteredAndExited],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+    }
+
+    private func rect(forIndex i: Int) -> NSRect {
+        NSRect(
+            x: Self.hPadding + CGFloat(i) * (Self.squareSize.width + Self.gap),
+            y: Self.vPadding,
+            width: Self.squareSize.width,
+            height: Self.squareSize.height
+        )
+    }
+
+    private func indexAt(_ point: NSPoint) -> Int? {
+        for (i, _) in CaptureMode.allCases.enumerated() where rect(forIndex: i).contains(point) {
+            return i
+        }
+        return nil
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+
+        let onFill = NSColor(deviceRed: 0.0, green: 0.48, blue: 1.0, alpha: 1.0)
+        let onFillHover = NSColor(deviceRed: 0.10, green: 0.55, blue: 1.0, alpha: 1.0)
+        let offStroke = NSColor(deviceRed: 0.50, green: 0.50, blue: 0.50, alpha: 0.45)
+        let offFillHover = NSColor(deviceRed: 0.50, green: 0.50, blue: 0.50, alpha: 0.12)
+        let onTextColor = CGColor(red: 1, green: 1, blue: 1, alpha: 1)
+        let offTextColor = CGColor(red: 0.55, green: 0.55, blue: 0.55, alpha: 1)
+
+        for (i, mode) in CaptureMode.allCases.enumerated() {
+            let r = rect(forIndex: i)
+            let path = NSBezierPath(roundedRect: r, xRadius: 7, yRadius: 7)
+            let isOn = enabledModes.contains(mode)
+            let isHovered = hoveredIndex == i
+
+            if isOn {
+                (isHovered ? onFillHover : onFill).setFill()
+                path.fill()
+            } else {
+                if isHovered {
+                    offFillHover.setFill()
+                    path.fill()
+                }
+                offStroke.setStroke()
+                path.lineWidth = 1
+                path.stroke()
+            }
+
+            let attrs: [NSAttributedString.Key: Any] = [
+                kCTFontAttributeName as NSAttributedString.Key: Self.labelFont,
+                kCTForegroundColorAttributeName as NSAttributedString.Key: isOn ? onTextColor : offTextColor
+            ]
+            let attr = NSAttributedString(string: mode.displayName, attributes: attrs)
+            let line = CTLineCreateWithAttributedString(attr)
+            let lb = CTLineGetBoundsWithOptions(line, .useOpticalBounds)
+            ctx.textPosition = CGPoint(
+                x: r.midX - lb.width / 2 - lb.minX,
+                y: r.midY - lb.height / 2 - lb.minY
+            )
+            CTLineDraw(line, ctx)
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        if let i = indexAt(p) {
+            onToggle(CaptureMode.allCases[i])
+        }
+    }
+
+    override func mouseMoved(with event: NSEvent) { updateHover(event) }
+    override func mouseEntered(with event: NSEvent) { updateHover(event) }
+    override func mouseExited(with event: NSEvent) {
+        if hoveredIndex != nil { hoveredIndex = nil; needsDisplay = true }
+    }
+
+    private func updateHover(_ event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        let new = indexAt(p)
+        if new != hoveredIndex { hoveredIndex = new; needsDisplay = true }
+    }
 }
 
 // MARK: - NSColor HEX Extension
