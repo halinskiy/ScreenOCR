@@ -1,6 +1,25 @@
 import Cocoa
 import CoreText
 
+enum ToastStyle {
+    case normal
+    case error
+
+    var bgColor: CGColor {
+        switch self {
+        case .normal: return NSColor(deviceRed: 0, green: 0, blue: 0, alpha: 0.7).cgColor
+        case .error:  return NSColor(deviceRed: 0.85, green: 0.18, blue: 0.18, alpha: 0.95).cgColor
+        }
+    }
+
+    var dwellSeconds: Double {
+        switch self {
+        case .normal: return 0.8
+        case .error:  return 2.0
+        }
+    }
+}
+
 final class ToastWindow: NSWindow {
     private static var current: ToastWindow?
 
@@ -12,10 +31,8 @@ final class ToastWindow: NSWindow {
     }()
     private static let toastTextColor: CGColor =
         NSColor(deviceRed: 1, green: 1, blue: 1, alpha: 1).cgColor
-    private static let toastBgColor: CGColor =
-        NSColor(deviceRed: 0, green: 0, blue: 0, alpha: 0.7).cgColor
 
-    static func show(_ message: String) {
+    static func show(_ message: String, style: ToastStyle = .normal) {
         current?.orderOut(nil)
 
         let line = makeLine(message)
@@ -45,7 +62,10 @@ final class ToastWindow: NSWindow {
         toast.collectionBehavior = [.canJoinAllSpaces, .transient]
         toast.isReleasedWhenClosed = false
 
-        let view = ToastView(frame: NSRect(x: 0, y: 0, width: width, height: height), line: line, textBounds: textBounds)
+        let view = ToastView(
+            frame: NSRect(x: 0, y: 0, width: width, height: height),
+            line: line, textBounds: textBounds, bgColor: style.bgColor
+        )
         toast.contentView = view
 
         toast.alphaValue = 0
@@ -58,7 +78,7 @@ final class ToastWindow: NSWindow {
             toast.animator().alphaValue = 1
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + style.dwellSeconds) {
             NSAnimationContext.runAnimationGroup({ ctx in
                 ctx.duration = 0.3
                 toast.animator().alphaValue = 0
@@ -82,10 +102,12 @@ final class ToastWindow: NSWindow {
 private final class ToastView: NSView {
     let line: CTLine
     let textBounds: CGRect
+    let bgColor: CGColor
 
-    init(frame: NSRect, line: CTLine, textBounds: CGRect) {
+    init(frame: NSRect, line: CTLine, textBounds: CGRect, bgColor: CGColor) {
         self.line = line
         self.textBounds = textBounds
+        self.bgColor = bgColor
         super.init(frame: frame)
     }
 
@@ -99,7 +121,7 @@ private final class ToastView: NSView {
             cornerHeight: bounds.height / 2, transform: nil
         )
         context.addPath(bgPath)
-        context.setFillColor(NSColor(deviceRed: 0, green: 0, blue: 0, alpha: 0.7).cgColor)
+        context.setFillColor(bgColor)
         context.fillPath()
 
         let x = (bounds.width - textBounds.width) / 2 - textBounds.minX

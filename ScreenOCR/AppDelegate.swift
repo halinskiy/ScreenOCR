@@ -234,7 +234,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DOMExtractor.getDOMElements(from: previousApp) { [weak self] elements in
                 guard let self else { return }
                 if elements.isEmpty {
-                    ToastWindow.show("Open in Safari/Chrome")
+                    ToastWindow.show("Open in Safari/Chrome", style: .error)
                     self.cancelCapture()
                     self.overlay.dismiss()
                     return
@@ -300,7 +300,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DOMExtractor.getDOMElements(from: previousApp) { [weak self] elements in
                 guard let self else { return }
                 if elements.isEmpty {
-                    ToastWindow.show("Open in Safari/Chrome")
+                    ToastWindow.show("Open in Safari/Chrome", style: .error)
                     self.cancelCapture()
                     self.overlay.dismiss()
                     return
@@ -509,11 +509,11 @@ final class ModeTogglesView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
 
-        let onFill = NSColor(deviceRed: 0.0, green: 0.48, blue: 1.0, alpha: 1.0)
-        let onFillHover = NSColor(deviceRed: 0.10, green: 0.55, blue: 1.0, alpha: 1.0)
+        let onFill = NSColor(deviceRed: 1.0, green: 1.0, blue: 1.0, alpha: 1.0)
+        let onFillHover = NSColor(deviceRed: 0.92, green: 0.92, blue: 0.92, alpha: 1.0)
         let offStroke = NSColor(deviceRed: 0.50, green: 0.50, blue: 0.50, alpha: 0.45)
         let offFillHover = NSColor(deviceRed: 0.50, green: 0.50, blue: 0.50, alpha: 0.12)
-        let onTextColor = CGColor(red: 1, green: 1, blue: 1, alpha: 1)
+        let onTextColor = CGColor(red: 0.06, green: 0.06, blue: 0.06, alpha: 1)
         let offTextColor = CGColor(red: 0.55, green: 0.55, blue: 0.55, alpha: 1)
 
         for (i, mode) in CaptureMode.allCases.enumerated() {
